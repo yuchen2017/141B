@@ -1,0 +1,106 @@
+import numpy as np
+import pandas as pd
+import itertools
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
+
+# ------------------------------
+# SETTINGS
+# ------------------------------
+
+sd = 60                  # standard deviation
+true_diff = 60           # meaningful difference (minute)
+alpha = 0.05             # significance level
+n_sims = 1000            # number of simulations per sample size
+
+# factorial design levels
+inoc_levels = ["1x", "2x", "3x"]
+tpp_levels = ["2h", "4h", "6h"]
+bottle_levels = ["BD", "Virtuo"]
+bact_levels = ["Resistant", "Susceptible"]
+
+# effect sizes (large effect according to your assumptions)
+# Each factor has mean shifts that produce about 60 min differences
+effect_inoc = {"1x": 0, "2x": true_diff, "3x": true_diff * 2/3}
+effect_tpp = {"2h": 0, "4h": true_diff, "6h": true_diff * 2/3}
+effect_bottle = {"BD": 0, "Virtuo": true_diff}
+effect_bact = {"Susceptible": 0, "Resistant": true_diff}
+
+# sample sizes per cell to test
+sample_sizes = [6, 8, 10, 12, 15]
+
+# ------------------------------
+# Simulation function
+# ------------------------------
+
+def simulate_once(n):
+    rows = []
+    for inoc, tpp, bottle, bact in itertools.product(
+            inoc_levels, tpp_levels, bottle_levels, bact_levels):
+
+        mean = (
+            effect_inoc[inoc] +
+            effect_tpp[tpp] +
+            effect_bottle[bottle] +
+            effect_bact[bact]
+        )
+
+        # generate growth times
+        data = np.random.normal(loc=mean, scale=sd, size=n)
+
+        for value in data:
+            rows.append([value, inoc, tpp, bottle, bact])
+
+    df = pd.DataFrame(rows, columns=["time", "Inoc", "TPP", "Bottle", "Bact"])
+    return df
+
+# ------------------------------
+# Power estimation loop
+# ------------------------------
+
+results = []
+
+for n in sample_sizes:
+    print(f"Running simulations for n = {n} per cell...")
+    
+    sig_inoc = 0
+    sig_tpp = 0
+    sig_bottle = 0
+    sig_bact = 0
+    sig_interaction = 0
+    
+    for _ in range(n_sims):
+        df = simulate_once(n)
+        
+        model = ols("time ~ C(Inoc)*C(TPP)*C(Bottle)*C(Bact)", data=df).fit()
+        anova_table = sm.stats.anova_lm(model, typ=2)
+        
+        # main effects
+        if anova_table.loc["C(Inoc)", "PR(>F)"] < alpha:
+            sig_inoc += 1
+        if anova_table.loc["C(TPP)", "PR(>F)"] < alpha:
+            sig_tpp += 1
+        if anova_table.loc["C(Bottle)", "PR(>F)"] < alpha:
+            sig_bottle += 1
+        if anova_table.loc["C(Bact)", "PR(>F)"] < alpha:
+            sig_bact += 1
+        
+        # combined interactions important to you
+        if anova_table.loc["C(Inoc):C(TPP)", "PR(>F)"] < alpha:
+            sig_interaction += 1
+            
+    results.append({
+        "n_per_cell": n,
+        "power_inoc": sig_inoc / n_sims,
+        "power_tpp": sig_tpp / n_sims,
+        "power_bottle": sig_bottle / n_sims,
+        "power_bact": sig_bact / n_sims,
+        "power_Inoc_TPP_interaction": sig_interaction / n_sims
+    })
+
+# ------------------------------
+# Print results
+# ------------------------------
+print("\nPower Estimates:")
+df_results = pd.DataFrame(results)
+print(df_results)
